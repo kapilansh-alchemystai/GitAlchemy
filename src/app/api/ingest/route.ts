@@ -107,7 +107,7 @@ export async function POST(req: Request) {
     console.log(`📁 Found ${files.length} files to process`);
 
     /* 4️⃣ Fetch + Ingest Loop */
-    const maxFiles = 50; 
+    const maxFiles = 100;
     let successCount = 0;
     const errors: string[] = [];
 
@@ -118,8 +118,10 @@ export async function POST(req: Request) {
         )}?ref=${encodeURIComponent(branchName)}`;
 
         const content = await ghFetchRaw(rawUrl);
-        
-        const fileContent = content;
+
+        // Prepend filename to content so it's available in search results
+        // (Alchemyst SDK doesn't return metadata in search, only content)
+        const fileContent = `// FILE: ${f.path}\n${content}`;
         const fileSize = Buffer.byteLength(fileContent, "utf-8");
 
         const finalGroupName = groupName || repo;
@@ -132,7 +134,7 @@ export async function POST(req: Request) {
             },
           ],
           context_type: 'resource',
-          source: 'github', 
+          source: 'github',
           scope: 'internal',
           metadata: {
             fileName: f.path,

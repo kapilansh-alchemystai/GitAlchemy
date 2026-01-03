@@ -25,6 +25,7 @@ import { cn } from "@/lib/utils"
 interface RepoDocumentationProps {
   owner: string
   repo: string
+  initialDocs?: DocumentationContent
 }
 
 interface DocumentationContent {
@@ -43,54 +44,31 @@ const sidebarSections = [
   },
 ]
 
-export function RepoDocumentation({ owner, repo }: RepoDocumentationProps) {
+export function RepoDocumentation({ owner, repo, initialDocs = {} }: RepoDocumentationProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [openSections, setOpenSections] = useState<string[]>(["Overview"])
-  const [documentation, setDocumentation] = useState<DocumentationContent>({})
+  // Initialize with server-provided docs (instant load, no flicker!)
+  const [documentation, setDocumentation] = useState<DocumentationContent>(initialDocs)
   const [loadingSections, setLoadingSections] = useState<Set<string>>(new Set())
 
-  // Load documentation from localStorage on mount
-  useEffect(() => {
-    const savedDocs = localStorage.getItem(`docs-${owner}-${repo}`)
-    if (savedDocs) {
-      try {
-        const parsed = JSON.parse(savedDocs)
-        setDocumentation(parsed)
-      } catch (e) {
-        console.error("Failed to load saved documentation", e)
-      }
+  // Save section to server after generating
+  const saveToServer = async (section: string, content: string) => {
+    try {
+      await fetch("/api/docs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ owner, repo, section, content }),
+      })
+    } catch (error) {
+      console.error("Failed to save to server:", error)
     }
-  }, [owner, repo])
-
-  // Save documentation to localStorage whenever it changes
-  useEffect(() => {
-    if (Object.keys(documentation).length > 0) {
-      localStorage.setItem(`docs-${owner}-${repo}`, JSON.stringify(documentation))
-    }
-  }, [documentation, owner, repo])
+  }
 
   // Fetch documentation for a section
   const fetchSection = async (sectionKey: string) => {
-    // Check if already loaded in state
+    // Check if already loaded
     if (documentation[sectionKey] !== undefined && documentation[sectionKey] !== null) {
       return
-    }
-
-    // Check localStorage
-    const savedDocs = localStorage.getItem(`docs-${owner}-${repo}`)
-    if (savedDocs) {
-      try {
-        const parsed = JSON.parse(savedDocs)
-        if (parsed[sectionKey] !== undefined && parsed[sectionKey] !== null) {
-          setDocumentation((prev) => ({
-            ...prev,
-            [sectionKey]: parsed[sectionKey],
-          }))
-          return
-        }
-      } catch (e) {
-        // Continue to fetch if parsing fails
-      }
     }
 
     setLoadingSections((prev) => new Set(prev).add(sectionKey))
@@ -114,10 +92,13 @@ export function RepoDocumentation({ owner, repo }: RepoDocumentationProps) {
           ...prev,
           [sectionKey]: data.content,
         }))
+        // Save to server for persistence
+        saveToServer(sectionKey, data.content)
       } else {
+        const errorContent = `**Error:** ${data.error}\n\nThis section couldn't be generated. The repository may not be fully ingested yet.`
         setDocumentation((prev) => ({
           ...prev,
-          [sectionKey]: `**Error:** ${data.error}\n\nThis section couldn't be generated. The repository may not be fully ingested yet.`,
+          [sectionKey]: errorContent,
         }))
       }
     } catch (error: any) {
@@ -135,29 +116,16 @@ export function RepoDocumentation({ owner, repo }: RepoDocumentationProps) {
     }
   }
 
-  // Load initial sections (only if not in localStorage)
+  // Auto-fetch sections that aren't loaded yet
   useEffect(() => {
-    const savedDocs = localStorage.getItem(`docs-${owner}-${repo}`)
-    if (savedDocs) {
-      try {
-        const parsed = JSON.parse(savedDocs)
-        // Only fetch sections that aren't already saved
-        if (!parsed.introduction) fetchSection("introduction")
-        if (!parsed["quick-start"]) fetchSection("quick-start")
-        if (!parsed.architecture) fetchSection("architecture")
-      } catch (e) {
-        // If parsing fails, fetch all
-        fetchSection("introduction")
-        fetchSection("quick-start")
-        fetchSection("architecture")
+    const sections = ["introduction", "quick-start", "architecture"]
+    sections.forEach((section) => {
+      if (!documentation[section]) {
+        fetchSection(section)
       }
-    } else {
-      // No saved docs, fetch all
-      fetchSection("introduction")
-      fetchSection("quick-start")
-      fetchSection("architecture")
-    }
-  }, [owner, repo])
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const toggleSection = (title: string) => {
     setOpenSections((prev) => (prev.includes(title) ? prev.filter((t) => t !== title) : [...prev, title]))
@@ -190,28 +158,28 @@ export function RepoDocumentation({ owner, repo }: RepoDocumentationProps) {
     // Render markdown-like content with better styling
     const formatMarkdown = (text: string): string => {
       let formatted = text
-      
+
       // Code blocks first (before inline code)
       formatted = formatted.replace(/```(\w+)?\n([\s\S]*?)```/g, (match, lang, code) => {
         return `<pre class="bg-muted p-4 rounded-lg overflow-x-auto my-4 border border-border"><code class="text-sm font-mono text-foreground">${code.trim()}</code></pre>`
       })
-      
+
       // Headers
       formatted = formatted.replace(/^### (.+)$/gm, '<h3 class="text-xl font-semibold mt-6 mb-3 text-foreground">$1</h3>')
       formatted = formatted.replace(/^## (.+)$/gm, '<h2 class="text-2xl font-semibold mt-8 mb-4 text-foreground">$1</h2>')
       formatted = formatted.replace(/^# (.+)$/gm, '<h1 class="text-3xl font-bold mt-10 mb-5 text-foreground">$1</h1>')
-      
+
       // Bold and italic
       formatted = formatted.replace(/\*\*(.*?)\*\*/g, '<strong class="font-semibold text-foreground">$1</strong>')
       formatted = formatted.replace(/\*(.*?)\*/g, '<em class="italic">$1</em>')
-      
+
       // Inline code (after code blocks)
       formatted = formatted.replace(/`([^`]+)`/g, '<code class="bg-muted px-1.5 py-0.5 rounded text-sm font-mono text-foreground">$1</code>')
-      
+
       // Lists
       formatted = formatted.replace(/^- (.+)$/gm, '<li class="ml-6 mb-2 list-disc">$1</li>')
       formatted = formatted.replace(/^(\d+)\. (.+)$/gm, '<li class="ml-6 mb-2 list-decimal">$2</li>')
-      
+
       // Paragraphs (split by double newlines)
       const paragraphs = formatted.split(/\n\n+/)
       formatted = paragraphs
@@ -224,15 +192,15 @@ export function RepoDocumentation({ owner, repo }: RepoDocumentationProps) {
           return `<p class="mb-4 text-foreground/90 leading-relaxed">${p.trim()}</p>`
         })
         .join('')
-      
+
       return formatted
     }
 
     return (
       <div className="prose prose-neutral dark:prose-invert max-w-none">
-        <div 
+        <div
           className="text-foreground/90 leading-relaxed"
-          dangerouslySetInnerHTML={{ 
+          dangerouslySetInnerHTML={{
             __html: formatMarkdown(content)
           }}
         />
@@ -273,7 +241,7 @@ export function RepoDocumentation({ owner, repo }: RepoDocumentationProps) {
 
           {/* Repo info */}
           <div className="border-b border-sidebar-border p-4">
-            <Link 
+            <Link
               href={`/${owner}/${repo}`}
               className="flex items-center gap-2 text-sm text-sidebar-foreground hover:text-sidebar-foreground/80 transition-colors"
             >

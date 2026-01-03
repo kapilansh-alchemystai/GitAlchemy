@@ -35,7 +35,7 @@ const sectionPrompts: Record<string, string> = {
 - Brief overview of the codebase structure
 
 Base your response on the actual code files provided. Be specific and reference actual components/files.`,
-  
+
   architecture: `Analyze and document the architecture of this repository:
 - Overall system architecture and design patterns
 - Key components/modules and their relationships
@@ -44,7 +44,7 @@ Base your response on the actual code files provided. Be specific and reference 
 - Data flow and component hierarchy
 
 Reference actual files and components from the codebase.`,
-  
+
   "quick-start": `Create a quick start guide for this repository:
 - Prerequisites and requirements
 - Installation steps (reference package.json, requirements.txt, etc.)
@@ -53,7 +53,7 @@ Reference actual files and components from the codebase.`,
 - First steps to get started
 
 Use actual information from configuration files in the codebase.`,
-  
+
   components: `Document the main components/modules:
 - List key components and their purposes
 - Component hierarchy and relationships
@@ -61,7 +61,7 @@ Use actual information from configuration files in the codebase.`,
 - Key props/interfaces used
 
 Reference actual component files from the codebase.`,
-  
+
   "state-management": `Explain the state management approach:
 - State management library/pattern used (Redux, Zustand, Context API, etc.)
 - How state is structured and organized
@@ -70,7 +70,7 @@ Reference actual component files from the codebase.`,
 - State update mechanisms
 
 Reference actual state management files.`,
-  
+
   routing: `Document the routing structure:
 - Routing library/framework used
 - Main routes and their purposes
@@ -79,7 +79,7 @@ Reference actual state management files.`,
 - Protected routes or special routing logic
 
 Reference actual routing configuration files.`,
-  
+
   functions: `List and document key functions:
 - Important utility functions
 - API/service functions
@@ -87,7 +87,7 @@ Reference actual routing configuration files.`,
 - Their purposes, parameters, and usage examples
 
 Reference actual function definitions from the codebase.`,
-  
+
   classes: `Document classes in the codebase:
 - Main classes and their purposes
 - Class hierarchy and inheritance
@@ -95,7 +95,7 @@ Reference actual function definitions from the codebase.`,
 - Usage patterns and examples
 
 Reference actual class definitions.`,
-  
+
   types: `Document TypeScript types/interfaces:
 - Key type definitions and interfaces
 - Interface structures and relationships
@@ -129,13 +129,13 @@ export async function POST(req: Request) {
     // Try semantic search first
     try {
       searchRes = await alchemyst.v1.context.search({
-        query: section === "introduction" 
+        query: section === "introduction"
           ? "main purpose features technology stack overview"
           : section === "architecture"
-          ? "architecture structure components modules design patterns"
-          : section === "quick-start"
-          ? "installation setup configuration run start"
-          : section,
+            ? "architecture structure components modules design patterns"
+            : section === "quick-start"
+              ? "installation setup configuration run start"
+              : section,
         similarity_threshold: 0.3,
         minimum_similarity_threshold: 0.3,
         scope: 'internal',
@@ -172,9 +172,20 @@ export async function POST(req: Request) {
       const content = item.content || item.document || "";
       if (!content) continue;
 
-      const name = item.metadata?.fileName || item.body_metadata?.fileName || item.fileName || "Unknown File";
+      // Try to extract fileName from metadata or content header
+      let name = item.metadata?.fileName || item.body_metadata?.fileName || item.fileName || null;
+
+      // If no metadata, try to extract from content (// FILE: pattern added during ingest)
+      if (!name) {
+        const pathMatch = content.match(/(?:\/\/|#)\s*FILE:\s*([^\n\r]+)/i);
+        if (pathMatch) {
+          name = pathMatch[1].trim();
+        }
+      }
+
+      name = name || "Unknown File";
       const chunk = `\n<<< FILE: ${name} >>>\n${content}\n<<< END OF FILE >>>\n`;
-      
+
       if ((contextData.length + chunk.length) < MAX_CONTEXT) {
         contextData += chunk;
         if (!sources.includes(name)) {

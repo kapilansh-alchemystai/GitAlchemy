@@ -14,11 +14,13 @@ import {
   MessageSquare,
   Zap,
   ChevronDown,
+  Trash2,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
+import MarkdownRender from "@/components/markdown-render"
 
 interface RepoChatProps {
   owner: string
@@ -36,15 +38,54 @@ export function RepoChat({ owner, repo, initialQuery }: RepoChatProps) {
   const [message, setMessage] = useState("")
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
   const [chatLoading, setChatLoading] = useState(false)
+  const [showClearConfirm, setShowClearConfirm] = useState(false)
+  const [isHistoryLoaded, setIsHistoryLoaded] = useState(false)
   const router = useRouter()
+  const storageKey = `gitalchemy-chat-${owner}-${repo}`
 
-  // Auto-submit if initialQuery is provided
+  // Load chat history from sessionStorage on mount (clears when tab closes)
   useEffect(() => {
-    if (initialQuery && !chatLoading && chatMessages.length === 0) {
+    try {
+      const saved = sessionStorage.getItem(storageKey)
+      if (saved) {
+        const parsed = JSON.parse(saved)
+        setChatMessages(parsed)
+      }
+    } catch (error) {
+      console.error("Error loading chat history:", error)
+    }
+    setIsHistoryLoaded(true)
+  }, [storageKey])
+
+  // Save chat history to sessionStorage whenever it changes
+  useEffect(() => {
+    if (isHistoryLoaded && chatMessages.length > 0) {
+      try {
+        sessionStorage.setItem(storageKey, JSON.stringify(chatMessages))
+      } catch (error) {
+        console.error("Error saving chat history:", error)
+      }
+    }
+  }, [chatMessages, storageKey, isHistoryLoaded])
+
+  // Auto-submit only if initialQuery is provided AND chat is empty
+  // Don't re-submit on refresh if there are already messages
+  useEffect(() => {
+    if (isHistoryLoaded && initialQuery && !chatLoading && chatMessages.length === 0) {
       handleSendMessage(initialQuery)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialQuery])
+  }, [initialQuery, isHistoryLoaded])
+
+  const handleClearChat = () => {
+    setChatMessages([])
+    try {
+      sessionStorage.removeItem(storageKey)
+    } catch (error) {
+      console.error("Error clearing chat history:", error)
+    }
+    setShowClearConfirm(false)
+  }
 
   const handleSendMessage = async (queryOrEvent: string | React.FormEvent) => {
     // Handle both form submission and direct query
@@ -61,11 +102,9 @@ export function RepoChat({ owner, repo, initialQuery }: RepoChatProps) {
     if (!userMessage || chatLoading) return
     setChatLoading(true)
 
-    // Add user message to chat
-    const newMessages: ChatMessage[] = [
-      ...chatMessages,
-      { role: "user", content: userMessage },
-    ]
+    // Add user message at the beginning (newest first)
+    const userMsg: ChatMessage = { role: "user", content: userMessage }
+    const newMessages: ChatMessage[] = [userMsg, ...chatMessages]
     setChatMessages(newMessages)
 
     try {
@@ -81,26 +120,19 @@ export function RepoChat({ owner, repo, initialQuery }: RepoChatProps) {
       const data = await response.json()
 
       if (data.ok) {
-        setChatMessages([
-          ...newMessages,
-          { 
-            role: "assistant", 
-            content: data.answer,
-            sources: data.sources || [],
-          },
-        ])
+        // Add assistant response at the beginning (after user message)
+        const assistantMsg: ChatMessage = {
+          role: "assistant",
+          content: data.answer,
+          sources: data.sources || [],
+        }
+        setChatMessages([assistantMsg, userMsg, ...chatMessages])
       } else {
-        setChatMessages([
-          ...newMessages,
-          { role: "assistant", content: `**Error:** ${data.error}` },
-        ])
+        setChatMessages([{ role: "assistant", content: `**Error:** ${data.error}` }, userMsg, ...chatMessages])
       }
     } catch (error: any) {
       console.error("Chat error:", error)
-      setChatMessages([
-        ...newMessages,
-        { role: "assistant", content: `**Error:** ${error.message}` },
-      ])
+      setChatMessages([{ role: "assistant", content: `**Error:** ${error.message}` }, userMsg, ...chatMessages])
     } finally {
       setChatLoading(false)
     }
@@ -119,24 +151,20 @@ export function RepoChat({ owner, repo, initialQuery }: RepoChatProps) {
               ? "bg-primary text-primary-foreground"
               : "bg-card border border-border text-card-foreground"
           )}>
-            <div 
-              className="whitespace-pre-wrap text-sm leading-relaxed"
-              dangerouslySetInnerHTML={{ 
-                __html: msg.content
-                  .replace(/\*\*(.*?)\*\*/g, '<strong class="font-semibold">$1</strong>')
-                  .replace(/\*(.*?)\*/g, '<em>$1</em>')
-                  .replace(/`([^`]+)`/g, '<code class="bg-background/50 dark:bg-background/30 px-1.5 py-0.5 rounded text-xs font-mono">$1</code>')
-                  .replace(/```(\w+)?\n([\s\S]*?)```/g, '<pre class="bg-background/50 dark:bg-background/30 p-3 rounded-lg overflow-x-auto my-2"><code class="text-xs font-mono">$2</code></pre>')
-                  .replace(/\n/g, '<br />')
-              }}
-            />
+            <div className="text-sm leading-relaxed">
+              {msg.role === "user" ? (
+                <span className="break-words">{msg.content}</span>
+              ) : (
+                <MarkdownRender>{msg.content}</MarkdownRender>
+              )}
+            </div>
             {msg.sources && msg.sources.length > 0 && (
               <div className="mt-3 pt-3 border-t border-border/50">
                 <p className="text-xs font-medium mb-2 opacity-75">Sources:</p>
                 <div className="flex flex-wrap gap-1.5">
                   {msg.sources.slice(0, 5).map((source, i) => (
-                    <span 
-                      key={i} 
+                    <span
+                      key={i}
                       className="text-xs bg-background/30 dark:bg-background/20 px-2 py-1 rounded-md border border-border/50"
                     >
                       {source}
@@ -156,9 +184,9 @@ export function RepoChat({ owner, repo, initialQuery }: RepoChatProps) {
       {/* Header */}
       <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-border bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/60">
         <div className="flex items-center gap-4">
-          <Button 
-            variant="ghost" 
-            size="icon" 
+          <Button
+            variant="ghost"
+            size="icon"
             onClick={() => router.push(`/${owner}/${repo}`)}
             className="hover:bg-accent"
           >
@@ -178,13 +206,52 @@ export function RepoChat({ owner, repo, initialQuery }: RepoChatProps) {
             </span>
           </div>
         </div>
+        {chatMessages.length > 0 && (
+          <div className="relative">
+            {showClearConfirm ? (
+              <div className="flex items-center gap-2 bg-destructive/10 px-3 py-2 rounded-lg">
+                <span className="text-sm text-destructive">Clear chat?</span>
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  onClick={handleClearChat}
+                  className="h-7"
+                >
+                  Yes
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setShowClearConfirm(false)}
+                  className="h-7"
+                >
+                  No
+                </Button>
+              </div>
+            ) : (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowClearConfirm(true)}
+                className="text-muted-foreground hover:text-destructive"
+              >
+                <Trash2 className="h-4 w-4 mr-2" />
+                Clear Chat
+              </Button>
+            )}
+          </div>
+        )}
       </header>
 
       {/* Chat content */}
       <main className="flex-1 overflow-hidden flex flex-col pb-20">
         <ScrollArea className="flex-1">
           <div className="mx-auto max-w-3xl px-4 py-8 sm:px-6 lg:px-8">
-            {chatMessages.length === 0 ? (
+            {!isHistoryLoaded ? (
+              <div className="flex flex-col items-center justify-center h-full min-h-[60vh]">
+                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+              </div>
+            ) : chatMessages.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-full min-h-[60vh] text-center">
                 <div className="mb-6 flex h-16 w-16 items-center justify-center rounded-full bg-primary/10">
                   <MessageSquare className="h-8 w-8 text-primary" />
@@ -193,7 +260,7 @@ export function RepoChat({ owner, repo, initialQuery }: RepoChatProps) {
                   Ask anything about {owner}/{repo}
                 </h2>
                 <p className="mb-8 max-w-md text-muted-foreground">
-                  Get answers about the codebase, architecture, functions, and more. 
+                  Get answers about the codebase, architecture, functions, and more.
                   I'll search through the repository to provide accurate information.
                 </p>
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 max-w-lg w-full">
@@ -229,13 +296,13 @@ export function RepoChat({ owner, repo, initialQuery }: RepoChatProps) {
               </div>
             ) : (
               <div className="space-y-4">
-                {chatMessages.map((msg, idx) => renderChatMessage(msg, idx))}
                 {chatLoading && (
                   <div className="flex items-center gap-2 text-muted-foreground mb-6">
                     <Loader2 className="h-4 w-4 animate-spin" />
                     <span>Thinking...</span>
                   </div>
                 )}
+                {chatMessages.map((msg, idx) => renderChatMessage(msg, idx))}
               </div>
             )}
           </div>
@@ -245,17 +312,6 @@ export function RepoChat({ owner, repo, initialQuery }: RepoChatProps) {
         <div className="fixed bottom-0 left-0 right-0 z-50 border-t border-border bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/80">
           <div className="mx-auto max-w-5xl px-4 py-3">
             <form onSubmit={(e) => handleSendMessage(e)} className="flex items-center gap-2">
-              {/* Fast badge/dropdown */}
-              <div className="relative">
-                <button
-                  type="button"
-                  className="flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-xs font-medium text-foreground hover:bg-accent transition-colors"
-                >
-                  <Zap className="h-3.5 w-3.5 text-primary" />
-                  <span>Fast</span>
-                  <ChevronDown className="h-3 w-3 text-muted-foreground" />
-                </button>
-              </div>
 
               {/* Input field */}
               <Input
@@ -284,7 +340,7 @@ export function RepoChat({ owner, repo, initialQuery }: RepoChatProps) {
           </div>
         </div>
       </main>
-    </div>
+    </div >
   )
 }
 
